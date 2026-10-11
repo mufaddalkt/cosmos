@@ -6,7 +6,7 @@ Reviewed 11 October 2026. Existing Next.js / R3F architecture and implemented co
 
 - Strict TypeScript checks passed.
 - ESLint passed with no reported errors or warnings.
-- All 10 navigation and scene invariant tests passed: scale bounds, logarithmic interpolation, overlap coverage, catalog consistency, required destinations, object travel, Home, bookmark/comparison behavior, time endpoints, and deterministic finite particle buffers.
+- All 14 navigation and scene invariant tests passed: scale bounds, logarithmic interpolation, overlap coverage, catalog consistency, required destinations, object travel, Home, bookmark/comparison behavior, time endpoints, deterministic finite particle buffers, and local-to-solar handoff ownership, position, radius, and camera anchoring for every principal planet.
 - Next.js 16.4 production build passed and exported the application and 404 page.
 - The static export was opened in the browser through the included local preview server.
 
@@ -31,6 +31,7 @@ The Node test runner has no browser storage, so Zustand reports that persistence
 
 ## Defects corrected
 
+- Selected planets previously remained at the solar-system center while their orbital counterparts appeared, obscuring the Sun. Close-ups now follow the body's orbital location, shrink to the matching solar-system radius, and transfer visibility at one shared boundary. The camera pulls back from the selected body toward the Sun. Earth, Neptune, and Saturn were visually checked through the transition; regression tests cover all eight planets and the Sun in both scale directions.
 - React 19 nested DOM-root unmount errors during 3D label transitions: labels now share a single React DOM owner outside the Canvas.
 - Abrupt scene disappearance on long jumps: mounted stages follow interpolated visual scale.
 - Journey wheel interception and touch-action inheritance.

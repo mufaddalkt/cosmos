@@ -4,6 +4,7 @@ import { Component, Suspense, lazy, useCallback, useEffect, useMemo, useRef, use
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { Planet } from './Planets';
+import { PLANETS, SOLAR_HANDOFF, localCameraTarget, localTransform, solarBody, solarBodyVisible, solarScale } from './solar-layout';
 import { DustBelt, Starfield, type Runtime } from './Particles';
 import { Stage } from './Stage';
 import { LabelContext, LabelOverlay, ScreenLabel, type LabelEntry, type LabelRegistry } from './Labels';
@@ -26,16 +27,6 @@ export interface CanvasSceneProps {
   onPerformance:(fps:number)=>void;
 }
 
-const PLANETS=[
-  {id:'mercury',orbit:.8,radius:.065,angle:2.1},
-  {id:'venus',orbit:1.2,radius:.09,angle:3.9},
-  {id:'earth',orbit:1.64,radius:.11,angle:.8},
-  {id:'mars',orbit:2.1,radius:.085,angle:5.4},
-  {id:'jupiter',orbit:2.94,radius:.245,angle:2.9},
-  {id:'saturn',orbit:3.82,radius:.205,angle:5.9},
-  {id:'uranus',orbit:4.68,radius:.14,angle:4.3},
-  {id:'neptune',orbit:5.35,radius:.137,angle:1.4},
-];
 const FOCUS_IDS=new Set(['sun','mercury','venus','earth','moon','mars','jupiter','saturn','uranus','neptune','pluto','ceres','eris','haumea','makemake','phobos','deimos','io','europa','ganymede','callisto','titan','enceladus','triton','charon','trappist-1e','vesta','halley']);
 const MOONS:Record<string,Array<{id:string;radius:number;distance:number;angle:number}>>={
   earth:[{id:'moon',radius:.27,distance:3.25,angle:.5}],
@@ -65,9 +56,12 @@ function LocalSystem({runtime,selectedId,scale,labels,onSelect,onFocus}:{runtime
   const moons=MOONS[id]??[];
   useFrame(()=>{
     if(!group.current)return;
-    group.current.scale.setScalar(Math.pow(.55,runtime.scale)*1.48);
+    const transform=localTransform(runtime.scale,id);
+    group.current.scale.setScalar(transform.scale);
+    group.current.position.set(...transform.position);
+    group.current.visible=transform.visible;
   });
-  return <Stage runtime={runtime} start={0} end={2.1}><group ref={group}>
+  return <Stage runtime={runtime} start={0} end={solarBody(id)?12:SOLAR_HANDOFF}><group ref={group}>
     <Planet id={id} radius={id==='saturn'?.74:1} runtime={runtime} onSelect={onSelect} onFocus={onFocus}/>
     {scale>.35&&moons.map(moon=>{
       const p:[number,number,number]=[Math.cos(moon.angle)*moon.distance,0,Math.sin(moon.angle)*moon.distance];
@@ -80,16 +74,23 @@ function LocalSystem({runtime,selectedId,scale,labels,onSelect,onFocus}:{runtime
   </group></Stage>;
 }
 
+function SolarPlanet({focusedId,...props}:Parameters<typeof Planet>[0]&{focusedId:string}) {
+  const group=useRef<THREE.Group>(null);
+  useFrame(()=>{if(group.current)group.current.visible=solarBodyVisible(props.runtime.scale,props.id,focusedId);});
+  return <group ref={group}><Planet {...props}/></group>;
+}
+
 function SolarSystem({runtime,scale,low,selectedId,labels,onSelect,onFocus}:{runtime:Runtime;scale:number;low:boolean;selectedId:string;labels:boolean;onSelect:(id:string)=>void;onFocus:(id:string)=>void}) {
   const group=useRef<THREE.Group>(null);
-  useFrame(()=>{if(group.current)group.current.scale.setScalar(Math.pow(.59,runtime.scale-2.5)*.84);});
+  const focusedId=FOCUS_IDS.has(selectedId)?selectedId:'earth';
+  useFrame(()=>{if(group.current)group.current.scale.setScalar(solarScale(runtime.scale));});
   return <Stage runtime={runtime} start={1.15} end={5.3}><group ref={group}>
-    <Planet id="sun" radius={.33} runtime={runtime} onSelect={onSelect} onFocus={onFocus}/>
+    <SolarPlanet focusedId={focusedId} id="sun" radius={.33} runtime={runtime} onSelect={onSelect} onFocus={onFocus}/>
     {PLANETS.map(planet=>{
       const p:[number,number,number]=[Math.cos(planet.angle)*planet.orbit,0,Math.sin(planet.angle)*planet.orbit];
       return <group key={planet.id}>
         <Orbit radius={planet.orbit} opacity={planet.id===selectedId?.29:.12} color={planet.id===selectedId?'#c0ac7c':'#53677b'}/>
-        <Planet id={planet.id} radius={planet.radius} position={p} runtime={runtime} onSelect={onSelect} onFocus={onFocus}/>
+        <SolarPlanet focusedId={focusedId} id={planet.id} radius={planet.radius} position={p} runtime={runtime} onSelect={onSelect} onFocus={onFocus}/>
         {labels&&scale>1.8&&scale<4.5&&<Label name={planet.id} position={[p[0],-planet.radius-.15,p[2]]} selected={selectedId===planet.id} onClick={()=>onSelect(planet.id)}/>}
       </group>;
     })}
@@ -116,6 +117,7 @@ function Navigation({props,runtime}:{props:CanvasSceneProps;runtime:Runtime}) {
   const aim=useRef({yaw:0,pitch:0,vx:0,vy:0});
   const scaleTarget=useRef(props.scale);
   const desiredPosition=useRef(new THREE.Vector3());
+  const cameraTarget=useRef(new THREE.Vector3());
   const sample=useRef({frames:0,elapsed:0,ready:false});
   useEffect(()=>{scaleTarget.current=props.scale;},[props.scale]);
   useEffect(()=>{
@@ -167,8 +169,14 @@ function Navigation({props,runtime}:{props:CanvasSceneProps;runtime:Runtime}) {
     const pitch=THREE.MathUtils.clamp(.05+solarTilt+nav.pitch,-1.35,1.35);
     const systemFrame=THREE.MathUtils.smoothstep(runtime.scale,1.2,2.3)*(1-THREE.MathUtils.smoothstep(runtime.scale,4.5,6));
     const distance=(size.width<650?10.6:7.15)*(1+systemFrame*(size.width<650?.5:.45));
-    const desired=desiredPosition.current.set(Math.sin(nav.yaw)*Math.cos(pitch)*distance,Math.sin(pitch)*distance,Math.cos(nav.yaw)*Math.cos(pitch)*distance);
-    camera.position.lerp(desired,1-Math.exp(-delta*8));camera.lookAt(0,0,0);
+    const focusedId=FOCUS_IDS.has(p.selectedId)?p.selectedId:'earth';
+    const target=p.mode==='explore'||p.mode==='journey'?localCameraTarget(runtime.scale,focusedId):[0,0,0];
+    camera.position.sub(cameraTarget.current);
+    cameraTarget.current.set(target[0],target[1],target[2]);
+    // Translate camera and aim together so tracking never exposes a second center body.
+    camera.position.add(cameraTarget.current);
+    const desired=desiredPosition.current.set(Math.sin(nav.yaw)*Math.cos(pitch)*distance,Math.sin(pitch)*distance,Math.cos(nav.yaw)*Math.cos(pitch)*distance).add(cameraTarget.current);
+    camera.position.lerp(desired,1-Math.exp(-delta*8));camera.lookAt(cameraTarget.current);
     const perspective=camera as THREE.PerspectiveCamera;
     const nearView=1-THREE.MathUtils.smoothstep(runtime.scale,.15,1.6);
     const offset=size.width>850||size.width/size.height>1.6?-.16*nearView:0;
